@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
@@ -20,13 +20,13 @@ class Ingredient(BaseModel):
     amount: str
     
     @validator('name')
-    def validate_name(cls, v):
+    def validate_name(cls, v: str) -> str:
         if not v or len(v) > 50:
             raise ValueError('材料名は1-50文字で入力してください')
         return v
     
     @validator('amount')
-    def validate_amount(cls, v):
+    def validate_amount(cls, v: str) -> str:
         if not v or len(v) > 20:
             raise ValueError('分量は1-20文字で入力してください')
         return v
@@ -43,19 +43,19 @@ class Recipe(BaseModel):
     servings: int = 1
     
     @validator('name')
-    def validate_name(cls, v):
+    def validate_name(cls, v: str) -> str:
         if not v or len(v) > 100:
             raise ValueError('レシピ名は1-100文字で入力してください')
         return v
     
     @validator('servings')
-    def validate_servings(cls, v):
+    def validate_servings(cls, v: int) -> int:
         if v < 1 or v > 99:
             raise ValueError('人数分は1-99で入力してください')
         return v
     
     @validator('keywords')
-    def validate_keywords(cls, v):
+    def validate_keywords(cls, v: List[str]) -> List[str]:
         if len(v) > 10:
             raise ValueError('キーワードは最大10個まで')
         for keyword in v:
@@ -64,25 +64,25 @@ class Recipe(BaseModel):
         return v
 
 class RecipeManager:
-    def __init__(self):
-        self.config = {
+    def __init__(self) -> None:
+        self.config: Dict[str, str] = {
             'host': 'localhost',
             'database': 'recipes_db',
             'user': 'postgres',
             'password': 'password'
         }
     
-    def _connect(self):
+    def _connect(self) -> psycopg2.extensions.connection:
         return psycopg2.connect(**self.config)
     
-    def add(self, recipe: Recipe):
+    def add(self, recipe: Recipe) -> int:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO recipes (name, keywords, servings) VALUES (%s, %s, %s) RETURNING id",
                     (recipe.name, recipe.keywords, recipe.servings)
                 )
-                recipe_id = cur.fetchone()[0]
+                recipe_id: int = cur.fetchone()[0]
                 
                 for ingredient in recipe.ingredients:
                     cur.execute(
@@ -97,11 +97,11 @@ class RecipeManager:
                     )
                 return recipe_id
     
-    def get(self, id: int):
+    def get(self, id: int) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM recipes WHERE id = %s AND deleted = FALSE", (id,))
-                recipe = cur.fetchone()
+                recipe: Optional[Dict[str, Any]] = cur.fetchone()
                 if recipe:
                     cur.execute(
                         "SELECT name, amount FROM recipe_ingredients WHERE recipe_id = %s AND deleted = FALSE",
@@ -115,8 +115,8 @@ class RecipeManager:
                     recipe['steps'] = cur.fetchall()
                 return recipe
     
-    def list(self, page: int = 1, limit: int = 20):
-        offset = (page - 1) * limit
+    def list(self, page: int = 1, limit: int = 20) -> List[Tuple[Any, ...]]:
+        offset: int = (page - 1) * limit
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -125,7 +125,7 @@ class RecipeManager:
                 )
                 return cur.fetchall()
     
-    def update(self, id: int, recipe: Recipe):
+    def update(self, id: int, recipe: Recipe) -> bool:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -134,7 +134,7 @@ class RecipeManager:
                 )
                 return cur.rowcount > 0
     
-    def delete(self, id: int):
+    def delete(self, id: int) -> bool:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -143,7 +143,7 @@ class RecipeManager:
                 )
                 return cur.rowcount > 0
     
-    def search_name(self, keyword: str):
+    def search_name(self, keyword: str) -> List[Tuple[Any, ...]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -152,7 +152,7 @@ class RecipeManager:
                 )
                 return cur.fetchall()
     
-    def search_keyword(self, keyword: str):
+    def search_keyword(self, keyword: str) -> List[Tuple[Any, ...]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -161,7 +161,7 @@ class RecipeManager:
                 )
                 return cur.fetchall()
     
-    def search_ingredient(self, keyword: str):
+    def search_ingredient(self, keyword: str) -> List[Tuple[Any, ...]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -173,26 +173,26 @@ class RecipeManager:
 rm = RecipeManager()
 
 @app.get("/api/recipes")
-def get_recipes(page: int = 1):
+def get_recipes(page: int = 1) -> List[Tuple[Any, ...]]:
     return rm.list(page)
 
 @app.get("/api/recipes/{recipe_id}")
-def get_recipe(recipe_id: int):
-    recipe = rm.get(recipe_id)
+def get_recipe(recipe_id: int) -> Dict[str, Any]:
+    recipe: Optional[Dict[str, Any]] = rm.get(recipe_id)
     if not recipe:
         raise HTTPException(status_code=404, detail="Recipe not found")
     return recipe
 
 @app.post("/api/recipes")
-def create_recipe(recipe: Recipe):
+def create_recipe(recipe: Recipe) -> Dict[str, Any]:
     try:
-        recipe_id = rm.add(recipe)
+        recipe_id: int = rm.add(recipe)
         return {"id": recipe_id, "message": "Recipe created"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.put("/api/recipes/{recipe_id}")
-def update_recipe(recipe_id: int, recipe: Recipe):
+def update_recipe(recipe_id: int, recipe: Recipe) -> Dict[str, str]:
     try:
         if not rm.update(recipe_id, recipe):
             raise HTTPException(status_code=404, detail="Recipe not found")
@@ -201,25 +201,25 @@ def update_recipe(recipe_id: int, recipe: Recipe):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/api/recipes/{recipe_id}")
-def delete_recipe(recipe_id: int):
+def delete_recipe(recipe_id: int) -> Dict[str, str]:
     if not rm.delete(recipe_id):
         raise HTTPException(status_code=404, detail="Recipe not found")
     return {"message": "Recipe deleted"}
 
 @app.get("/api/recipes/search/name/{keyword}")
-def search_recipes_by_name(keyword: str):
+def search_recipes_by_name(keyword: str) -> List[Tuple[Any, ...]]:
     return rm.search_name(keyword)
 
 @app.get("/api/recipes/search/keyword/{keyword}")
-def search_recipes_by_keyword(keyword: str):
+def search_recipes_by_keyword(keyword: str) -> List[Tuple[Any, ...]]:
     return rm.search_keyword(keyword)
 
 @app.get("/api/recipes/search/ingredient/{keyword}")
-def search_recipes_by_ingredient(keyword: str):
+def search_recipes_by_ingredient(keyword: str) -> List[Tuple[Any, ...]]:
     return rm.search_ingredient(keyword)
 
 @app.get("/health")
-def health_check():
+def health_check() -> Dict[str, Any]:
     return {"status": "ok", "timestamp": datetime.now()}
 
 if __name__ == "__main__":
