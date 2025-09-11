@@ -37,7 +37,12 @@
             
             <div class="form-group">
               <label>キーワード</label>
-              <input v-model="keywordInput" @keyup.enter="addKeyword" placeholder="キーワードを入力してEnter" class="form-input">
+              <input 
+                v-model="keywordInput" 
+                @keydown.enter.prevent="addKeyword" 
+                placeholder="キーワードを入力してEnter" 
+                class="form-input"
+              >
               <div class="keywords">
                 <span v-for="(keyword, index) in newRecipe.keywords" :key="index" class="keyword-tag">
                   {{ keyword }}
@@ -80,9 +85,13 @@
         <div v-else-if="recipes.length === 0" class="empty">レシピがありません</div>
         <div v-else>
           <div v-for="recipe in recipes" :key="recipe.id" class="recipe-card" @click="viewRecipe(recipe.id)">
-            <h3>{{ recipe.name }}</h3>
-            <p>{{ recipe.servings }}人分</p>
-            <small>{{ formatDate(recipe.created) }}</small>
+            <h3>{{ recipe.name || 'レシピ名なし' }}</h3>
+            <p v-if="recipe.servings">{{ recipe.servings }}人分</p>
+            <small v-if="recipe.created">{{ formatDate(recipe.created) }}</small>
+            <!-- デバッグ用 -->
+            <div style="font-size: 10px; color: #ccc; margin-top: 5px;">
+              ID: {{ recipe.id }}, Type: {{ typeof recipe }}
+            </div>
           </div>
         </div>
       </div>
@@ -174,9 +183,30 @@ const loadRecipes = async () => {
   loading.value = true
   try {
     const response = await axios.get('/api/recipes')
-    recipes.value = response.data
+    console.log('Load recipes response:', response.data)
+    
+    // データ形式を統一的に処理
+    if (Array.isArray(response.data)) {
+      if (response.data.length > 0 && Array.isArray(response.data[0])) {
+        // 配列形式の場合
+        recipes.value = response.data.map((item: any[]) => ({
+          id: item[0],
+          name: item[1], 
+          servings: item[2],
+          created: item[3]
+        }))
+      } else {
+        // オブジェクト形式の場合
+        recipes.value = response.data
+      }
+    } else {
+      recipes.value = []
+    }
+    
+    console.log('Processed recipes:', recipes.value)
   } catch (error) {
     console.error('レシピの読み込みに失敗しました:', error)
+    recipes.value = []
   } finally {
     loading.value = false
   }
@@ -223,7 +253,25 @@ const search = async () => {
   loading.value = true
   try {
     const response = await axios.get(`/api/recipes/search/${searchType.value}/${searchQuery.value}`)
-    recipes.value = response.data
+    console.log('Search response:', response.data)
+    
+    // 検索結果を統一形式に変換
+    if (Array.isArray(response.data)) {
+      if (response.data.length > 0 && Array.isArray(response.data[0])) {
+        // 配列形式の場合
+        recipes.value = response.data.map((item: any[]) => ({
+          id: item[0],
+          name: item[1],
+          servings: item[2] || null,
+          created: item[3] || null
+        }))
+      } else {
+        // オブジェクト形式の場合
+        recipes.value = response.data
+      }
+    } else {
+      recipes.value = []
+    }
   } catch (error) {
     console.error('検索に失敗しました:', error)
   } finally {
@@ -232,8 +280,9 @@ const search = async () => {
 }
 
 const addKeyword = () => {
-  if (keywordInput.value.trim() && newRecipe.value.keywords.length < 10) {
-    newRecipe.value.keywords.push(keywordInput.value.trim())
+  const keyword = keywordInput.value.trim()
+  if (keyword && newRecipe.value.keywords.length < 10 && !newRecipe.value.keywords.includes(keyword)) {
+    newRecipe.value.keywords.push(keyword)
     keywordInput.value = ''
   }
 }
@@ -279,8 +328,19 @@ const editRecipe = () => {
   alert('編集機能は準備中です')
 }
 
-const formatDate = (dateString: string) => {
-  return new Date(dateString).toLocaleDateString('ja-JP')
+const formatDate = (dateString: string | undefined) => {
+  if (!dateString) return ''
+  try {
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return ''
+    return date.toLocaleDateString('ja-JP', {
+      year: 'numeric',
+      month: 'numeric', 
+      day: 'numeric'
+    })
+  } catch {
+    return ''
+  }
 }
 
 onMounted(() => {
@@ -439,9 +499,30 @@ onMounted(() => {
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   cursor: pointer;
   transition: transform 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .recipe-card:hover { transform: translateY(-2px); }
+
+.recipe-card h3 {
+  margin: 0;
+  color: #333;
+  font-size: 1.1rem;
+}
+
+.recipe-card p {
+  margin: 0;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.recipe-card small {
+  color: #999;
+  font-size: 0.8rem;
+  margin-top: auto;
+}
 
 .recipe-detail .recipe-header {
   display: flex;

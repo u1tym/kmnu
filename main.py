@@ -115,15 +115,24 @@ class RecipeManager:
                     recipe['steps'] = cur.fetchall()
                 return recipe
     
-    def list(self, page: int = 1, limit: int = 20) -> List[Tuple[Any, ...]]:
+    def list(self, page: int = 1, limit: int = 20) -> List[Dict[str, Any]]:
         offset: int = (page - 1) * limit
         with self._connect() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     "SELECT id, name, servings, created FROM recipes WHERE deleted = FALSE ORDER BY created DESC LIMIT %s OFFSET %s",
                     (limit, offset)
                 )
-                return cur.fetchall()
+                recipes = cur.fetchall()
+                # 日付をISO形式の文字列に変換
+                result = []
+                for recipe in recipes:
+                    recipe_dict = dict(recipe)
+                    if recipe_dict['created']:
+                        recipe_dict['created'] = recipe_dict['created'].isoformat()
+                    result.append(recipe_dict)
+                print(f"List API returning: {result}")
+                return result
     
     def update(self, id: int, recipe: Recipe) -> bool:
         with self._connect() as conn:
@@ -143,37 +152,50 @@ class RecipeManager:
                 )
                 return cur.rowcount > 0
     
-    def search_name(self, keyword: str) -> List[Tuple[Any, ...]]:
+    def search_name(self, keyword: str) -> List[Dict[str, Any]]:
         with self._connect() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, name FROM recipes WHERE name ILIKE %s AND deleted = FALSE ORDER BY created DESC",
+                    "SELECT id, name, created FROM recipes WHERE name ILIKE %s AND deleted = FALSE ORDER BY created DESC",
                     (f'%{keyword}%',)
                 )
-                return cur.fetchall()
+                recipes = cur.fetchall()
+                for recipe in recipes:
+                    if recipe['created']:
+                        recipe['created'] = recipe['created'].isoformat()
+                return recipes
     
-    def search_keyword(self, keyword: str) -> List[Tuple[Any, ...]]:
+    def search_keyword(self, keyword: str) -> List[Dict[str, Any]]:
         with self._connect() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, name FROM recipes WHERE %s = ANY(keywords) AND deleted = FALSE ORDER BY created DESC",
+                    "SELECT id, name, created FROM recipes WHERE %s = ANY(keywords) AND deleted = FALSE ORDER BY created DESC",
                     (keyword,)
                 )
-                return cur.fetchall()
+                recipes = cur.fetchall()
+                for recipe in recipes:
+                    if recipe['created']:
+                        recipe['created'] = recipe['created'].isoformat()
+                return recipes
     
-    def search_ingredient(self, keyword: str) -> List[Tuple[Any, ...]]:
+    def search_ingredient(self, keyword: str) -> List[Dict[str, Any]]:
         with self._connect() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT DISTINCT r.id, r.name FROM recipes r JOIN recipe_ingredients i ON r.id = i.recipe_id WHERE i.name ILIKE %s AND r.deleted = FALSE AND i.deleted = FALSE ORDER BY r.created DESC",
+                    "SELECT r.id, r.name, r.servings, r.created FROM recipes r WHERE r.id IN (SELECT DISTINCT recipe_id FROM recipe_ingredients WHERE name ILIKE %s AND deleted = FALSE) AND r.deleted = FALSE ORDER BY r.created DESC",
                     (f'%{keyword}%',)
                 )
-                return cur.fetchall()
+                recipes = cur.fetchall()
+                print(f"Ingredient search for '{keyword}': {recipes}")
+                for recipe in recipes:
+                    if recipe['created']:
+                        recipe['created'] = recipe['created'].isoformat()
+                return recipes
 
 rm = RecipeManager()
 
 @app.get("/api/recipes")
-def get_recipes(page: int = 1) -> List[Tuple[Any, ...]]:
+def get_recipes(page: int = 1) -> List[Dict[str, Any]]:
     return rm.list(page)
 
 @app.get("/api/recipes/{recipe_id}")
@@ -207,15 +229,15 @@ def delete_recipe(recipe_id: int) -> Dict[str, str]:
     return {"message": "Recipe deleted"}
 
 @app.get("/api/recipes/search/name/{keyword}")
-def search_recipes_by_name(keyword: str) -> List[Tuple[Any, ...]]:
+def search_recipes_by_name(keyword: str) -> List[Dict[str, Any]]:
     return rm.search_name(keyword)
 
 @app.get("/api/recipes/search/keyword/{keyword}")
-def search_recipes_by_keyword(keyword: str) -> List[Tuple[Any, ...]]:
+def search_recipes_by_keyword(keyword: str) -> List[Dict[str, Any]]:
     return rm.search_keyword(keyword)
 
 @app.get("/api/recipes/search/ingredient/{keyword}")
-def search_recipes_by_ingredient(keyword: str) -> List[Tuple[Any, ...]]:
+def search_recipes_by_ingredient(keyword: str) -> List[Dict[str, Any]]:
     return rm.search_ingredient(keyword)
 
 @app.get("/health")
