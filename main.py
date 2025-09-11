@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, validator
 from typing import List, Optional, Dict, Any, Tuple
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
+from PIL import Image
+import io
 
 app = FastAPI(title="Recipe Manager API", version="1.0.0")
 
@@ -62,6 +65,63 @@ class Recipe(BaseModel):
             if len(keyword) > 20:
                 raise ValueError('キーワードは1-20文字で入力してください')
         return v
+
+class PhotoManager:
+    def __init__(self, db_config: Dict[str, str]) -> None:
+        self.config = db_config
+    
+    def _connect(self) -> psycopg2.extensions.connection:
+        return psycopg2.connect(**self.config)
+    
+    def _compress_image(self, image_data: bytes, max_size: int = 2 * 1024 * 1024) -> Tuple[bytes, str]:
+        """画像を圧縮（2MB超過時）"""
+        if len(image_data) <= max_size:
+            # 元の形式を判定
+            img = Image.open(io.BytesIO(image_data))
+            return image_data, img.format.lower()
+        
+        # 圧縮処理
+        img = Image.open(io.BytesIO(image_data))
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+        
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=85, optimize=True)
+        return output.getvalue(), 'jpeg'
+    
+    def add_photo(self, file_data: bytes, original_name: str, content_type: str) -> int:
+        compressed_data, format_type = self._compress_image(file_data)
+        
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                # 連番ファイル名生成
+                cur.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM photos")
+                next_id = cur.fetchone()[0]
+                filename = f"{next_id:03d}.{format_type}"
+                
+                cur.execute(
+                    "INSERT INTO photos (filename, original_name, content_type, file_size, image_data) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (filename, original_name, f"image/{format_type}", len(compressed_data), compressed_data)
+                )
+                return cur.fetchone()[0]
+    
+    def get_photo(self, photo_id: int) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM photos WHERE id = %s AND deleted = FALSE",
+                    (photo_id,)
+                )
+                return cur.fetchone()
+    
+    def delete_photo(self, photo_id: int) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE photos SET deleted = TRUE WHERE id = %s AND deleted = FALSE",
+                    (photo_id,)
+                )
+                return cur.rowcount > 0
 
 class RecipeManager:
     def __init__(self) -> None:
@@ -193,6 +253,7 @@ class RecipeManager:
                 return recipes
 
 rm = RecipeManager()
+pm = PhotoManager(rm.config)
 
 @app.get("/api/recipes")
 def get_recipes(page: int = 1) -> List[Dict[str, Any]]:
@@ -239,6 +300,43 @@ def search_recipes_by_keyword(keyword: str) -> List[Dict[str, Any]]:
 @app.get("/api/recipes/search/ingredient/{keyword}")
 def search_recipes_by_ingredient(keyword: str) -> List[Dict[str, Any]]:
     return rm.search_ingredient(keyword)
+
+@app.post("/api/photos")
+async def upload_photo(file: UploadFile = File(...)) -> Dict[str, Any]:
+    # ファイル形式チェック
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="画像ファイルのみアップロード可能です")
+    
+    if file.content_type not in ['image/jpeg', 'image/png']:
+        raise HTTPException(status_code=400, detail="JPEGまたはPNG形式のみ対応しています")
+    
+    # ファイルサイズチェック（5MB）
+    file_data = await file.read()
+    if len(file_data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="ファイルサイズは5MB以下にしてください")
+    
+    try:
+        photo_id = pm.add_photo(file_data, file.filename or "unknown", file.content_type)
+        return {"id": photo_id, "message": "Photo uploaded"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/photos/{photo_id}")
+def get_photo(photo_id: int) -> Response:
+    photo = pm.get_photo(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    
+    return Response(
+        content=photo['image_data'],
+        media_type=photo['content_type']
+    )
+
+@app.delete("/api/photos/{photo_id}")
+def delete_photo(photo_id: int) -> Dict[str, str]:
+    if not pm.delete_photo(photo_id):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return {"message": "Photo deleted"}
 
 @app.get("/health")
 def health_check() -> Dict[str, Any]:

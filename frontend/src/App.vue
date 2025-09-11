@@ -65,7 +65,23 @@
               <label>手順</label>
               <div v-for="(step, index) in newRecipe.steps" :key="index" class="step-row">
                 <span class="step-number">{{ index + 1 }}.</span>
-                <textarea v-model="step.description" placeholder="手順を入力" class="step-input"></textarea>
+                <div class="step-content">
+                  <textarea v-model="step.description" placeholder="手順を入力" class="step-input"></textarea>
+                  <div class="photo-upload">
+                    <input 
+                      type="file" 
+                      :id="`photo-${index}`" 
+                      @change="uploadStepPhoto(index, $event)" 
+                      accept="image/jpeg,image/png"
+                      class="photo-input"
+                    >
+                    <label :for="`photo-${index}`" class="photo-label">📷 写真追加</label>
+                    <div v-if="step.photo_id" class="photo-preview">
+                      <img :src="`/api/photos/${step.photo_id}`" alt="手順写真" class="step-photo">
+                      <button type="button" @click="removeStepPhoto(index)" class="remove-photo-btn">×</button>
+                    </div>
+                  </div>
+                </div>
                 <button type="button" @click="removeStep(index)" class="remove-btn">削除</button>
               </div>
               <button type="button" @click="addStep" class="add-btn">+ 手順追加</button>
@@ -128,8 +144,11 @@
           <div v-if="selectedRecipe.steps?.length" class="steps">
             <h3>手順</h3>
             <ol>
-              <li v-for="step in selectedRecipe.steps" :key="step.description">
-                {{ step.description }}
+              <li v-for="step in selectedRecipe.steps" :key="step.description" class="step-item">
+                <div class="step-text">{{ step.description }}</div>
+                <div v-if="step.photo_id" class="step-photo-container">
+                  <img :src="`/api/photos/${step.photo_id}`" alt="手順写真" class="step-photo-detail">
+                </div>
               </li>
             </ol>
           </div>
@@ -300,7 +319,44 @@ const removeIngredient = (index: number) => {
 }
 
 const addStep = () => {
-  newRecipe.value.steps.push({ description: '' })
+  newRecipe.value.steps.push({ description: '', photo_id: null })
+}
+
+const uploadStepPhoto = async (stepIndex: number, event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  
+  // ファイルサイズチェック
+  if (file.size > 5 * 1024 * 1024) {
+    alert('ファイルサイズは5MB以下にしてください')
+    return
+  }
+  
+  const formData = new FormData()
+  formData.append('file', file)
+  
+  try {
+    const response = await axios.post('/api/photos', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    newRecipe.value.steps[stepIndex].photo_id = response.data.id
+  } catch (error) {
+    console.error('写真アップロードに失敗しました:', error)
+    alert('写真アップロードに失敗しました')
+  }
+}
+
+const removeStepPhoto = async (stepIndex: number) => {
+  const photoId = newRecipe.value.steps[stepIndex].photo_id
+  if (!photoId) return
+  
+  try {
+    await axios.delete(`/api/photos/${photoId}`)
+    newRecipe.value.steps[stepIndex].photo_id = null
+  } catch (error) {
+    console.error('写真削除に失敗しました:', error)
+  }
 }
 
 const removeStep = (index: number) => {
@@ -447,8 +503,91 @@ onMounted(() => {
 
 .ingredient-input { flex: 2; }
 .amount-input { flex: 1; }
-.step-input { flex: 1; min-height: 60px; }
+.step-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.step-input { min-height: 60px; }
 .step-number { font-weight: bold; min-width: 30px; }
+
+.photo-upload {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.photo-input {
+  display: none;
+}
+
+.photo-label {
+  padding: 0.25rem 0.5rem;
+  background: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.photo-label:hover {
+  background: #e9ecef;
+}
+
+.photo-preview {
+  position: relative;
+  display: inline-block;
+}
+
+.step-photo {
+  width: 80px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+.remove-photo-btn {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #dc3545;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-item {
+  margin-bottom: 1rem;
+  padding: 0.5rem;
+  border-left: 3px solid #007bff;
+  background: #f8f9fa;
+}
+
+.step-text {
+  margin-bottom: 0.5rem;
+}
+
+.step-photo-container {
+  text-align: center;
+}
+
+.step-photo-detail {
+  max-width: 300px;
+  max-height: 200px;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
 
 .add-btn, .remove-btn {
   padding: 0.25rem 0.5rem;
@@ -569,6 +708,20 @@ onMounted(() => {
   
   .recipe-list {
     grid-template-columns: 1fr;
+  }
+  
+  .step-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .step-content {
+    order: 1;
+  }
+  
+  .remove-btn {
+    order: 2;
+    align-self: flex-end;
   }
 }
 </style>
